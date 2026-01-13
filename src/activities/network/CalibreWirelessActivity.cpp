@@ -16,6 +16,45 @@
 namespace {
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;  // Port to receive responses
+
+// Write buffer for batched SD writes (improves throughput by reducing write calls)
+constexpr size_t WRITE_BUFFER_SIZE = 4096;  // 4KB buffer
+static uint8_t writeBuffer[WRITE_BUFFER_SIZE];
+static size_t writeBufferPos = 0;
+static FsFile* currentWriteFile = nullptr;
+
+static bool flushWriteBuffer() {
+  if (writeBufferPos > 0 && currentWriteFile && *currentWriteFile) {
+    esp_task_wdt_reset();
+    const size_t written = currentWriteFile->write(writeBuffer, writeBufferPos);
+    esp_task_wdt_reset();
+    if (written != writeBufferPos) {
+      writeBufferPos = 0;
+      return false;
+    }
+    writeBufferPos = 0;
+  }
+  return true;
+}
+
+static bool bufferedWrite(const uint8_t* data, size_t len) {
+  while (len > 0) {
+    const size_t space = WRITE_BUFFER_SIZE - writeBufferPos;
+    const size_t toCopy = std::min(space, len);
+
+    memcpy(writeBuffer + writeBufferPos, data, toCopy);
+    writeBufferPos += toCopy;
+    data += toCopy;
+    len -= toCopy;
+
+    if (writeBufferPos >= WRITE_BUFFER_SIZE) {
+      if (!flushWriteBuffer()) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 }  // namespace
 
 void CalibreWirelessActivity::displayTaskTrampoline(void* param) {
@@ -80,7 +119,9 @@ void CalibreWirelessActivity::onExit() {
     tcpClient.stop();
   }
 
-  // Close any open file to prevent corruption
+  // Flush write buffer and close any open file to prevent corruption
+  flushWriteBuffer();
+  currentWriteFile = nullptr;
   if (currentFile) {
     Serial.printf("[%lu] [CAL] Closing open file...\n", millis());
     currentFile.flush();
@@ -374,6 +415,7 @@ bool CalibreWirelessActivity::readJsonMessage(std::string& message) {
     }
     // Read in chunks
     char buf[1024];
+    int iterations = 0;
     while (available > 0) {
       int toRead = std::min(available, static_cast<int>(sizeof(buf)));
       int bytesRead = tcpClient.read(reinterpret_cast<uint8_t*>(buf), toRead);
@@ -382,6 +424,10 @@ bool CalibreWirelessActivity::readJsonMessage(std::string& message) {
         available -= bytesRead;
       } else {
         break;
+      }
+      // Reset watchdog every 16 iterations to prevent timeout during large reads
+      if ((++iterations & 0xF) == 0) {
+        esp_task_wdt_reset();
       }
     }
   }
@@ -624,8 +670,14 @@ void CalibreWirelessActivity::handleSendBook(const std::string& data) {
             numEnd++;
           }
           if (numEnd > numStart) {
-            length = std::stoul(data.substr(numStart, numEnd - numStart));
-            break;
+            // Use strtoul instead of std::stoul to avoid exceptions on ESP32
+            char* endPtr = nullptr;
+            const std::string numStr = data.substr(numStart, numEnd - numStart);
+            length = strtoul(numStr.c_str(), &endPtr, 10);
+            if (endPtr && *endPtr == '\0') {
+              break;
+            }
+            length = 0;  // Reset if parsing failed
           }
         }
       }
@@ -655,12 +707,18 @@ void CalibreWirelessActivity::handleSendBook(const std::string& data) {
   setState(WirelessState::RECEIVING);
   setStatus("Receiving: " + filename);
 
-  // Open file for writing
+  // Open file for writing - reset watchdog as FAT allocation can be slow
+  esp_task_wdt_reset();
   if (!SdMan.openFileForWrite("CAL", currentFilename.c_str(), currentFile)) {
     setError("Failed to create file");
     sendJsonResponse(OpCode::ERROR, "{\"message\":\"Failed to create file\"}");
     return;
   }
+  esp_task_wdt_reset();
+
+  // Initialize write buffer
+  currentWriteFile = &currentFile;
+  writeBufferPos = 0;
 
   // Send OK to start receiving binary data
   sendJsonResponse(OpCode::OK, "{}");
@@ -672,11 +730,12 @@ void CalibreWirelessActivity::handleSendBook(const std::string& data) {
   // Check if recvBuffer has leftover data (binary file data that arrived with the JSON)
   if (!recvBuffer.empty()) {
     size_t toWrite = std::min(recvBuffer.size(), binaryBytesRemaining);
-    size_t written = currentFile.write(reinterpret_cast<const uint8_t*>(recvBuffer.data()), toWrite);
-    bytesReceived += written;
-    binaryBytesRemaining -= written;
-    recvBuffer = recvBuffer.substr(toWrite);
-    updateRequired = true;
+    if (bufferedWrite(reinterpret_cast<const uint8_t*>(recvBuffer.data()), toWrite)) {
+      bytesReceived += toWrite;
+      binaryBytesRemaining -= toWrite;
+      recvBuffer = recvBuffer.substr(toWrite);
+      updateRequired = true;
+    }
   }
 }
 
@@ -708,6 +767,8 @@ void CalibreWirelessActivity::receiveBinaryData() {
   if (available == 0) {
     // Check if connection is still alive
     if (!tcpClient.connected()) {
+      flushWriteBuffer();
+      currentWriteFile = nullptr;
       currentFile.close();
       inBinaryMode = false;
       setError("Transfer interrupted");
@@ -715,18 +776,34 @@ void CalibreWirelessActivity::receiveBinaryData() {
     return;
   }
 
-  uint8_t buffer[1024];
+  // Use 4KB buffer for network reads
+  uint8_t buffer[4096];
   const size_t toRead = std::min(sizeof(buffer), binaryBytesRemaining);
+
+  // Reset watchdog before network read
+  esp_task_wdt_reset();
   const size_t bytesRead = tcpClient.read(buffer, toRead);
 
   if (bytesRead > 0) {
-    currentFile.write(buffer, bytesRead);
+    // Use buffered write for better throughput
+    if (!bufferedWrite(buffer, bytesRead)) {
+      flushWriteBuffer();
+      currentWriteFile = nullptr;
+      currentFile.close();
+      inBinaryMode = false;
+      setError("Write error");
+      return;
+    }
+
     bytesReceived += bytesRead;
     binaryBytesRemaining -= bytesRead;
     updateRequired = true;
 
     if (binaryBytesRemaining == 0) {
-      // Transfer complete
+      // Transfer complete - flush remaining buffer
+      esp_task_wdt_reset();
+      flushWriteBuffer();
+      currentWriteFile = nullptr;
       currentFile.flush();
       currentFile.close();
       inBinaryMode = false;
@@ -818,6 +895,8 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
     return 64ULL * 1024 * 1024 * 1024;  // Conservative fallback
   }
 
+  esp_task_wdt_reset();
+
   // Probe sizes from large to small (exponential decrease)
   // Start at 256GB (larger than any typical SD card) and work down
   constexpr uint64_t probeSizes[] = {
@@ -839,10 +918,12 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
   uint64_t availableSpace = 64ULL * 1024 * 1024;  // Minimum 64MB fallback
 
   for (const uint64_t size : probeSizes) {
+    esp_task_wdt_reset();
     // cppcheck-suppress useStlAlgorithm
     if (testFile.preAllocate(size)) {
       availableSpace = size;
       // Truncate back to 0 to release the allocation
+      esp_task_wdt_reset();
       testFile.truncate(0);
       Serial.printf("[%lu] [CAL] Free space probe: %llu bytes available\n", millis(),
                     static_cast<unsigned long long>(availableSpace));
@@ -850,6 +931,7 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
     }
   }
 
+  esp_task_wdt_reset();
   testFile.close();
   SdMan.remove(testPath);
 
