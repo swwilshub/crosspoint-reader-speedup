@@ -887,11 +887,9 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError) {
           reject(err);
         }
       } else if (msg.startsWith('PROGRESS:')) {
-        // Server confirmed progress - we can use this for accurate tracking
-        const parts = msg.split(':');
-        const received = parseInt(parts[1]);
-        const total = parseInt(parts[2]);
-        if (onProgress) onProgress(received, total);
+        // Server confirmed progress - log for debugging but don't update UI
+        // (local progress is smoother, server progress causes jumping)
+        console.log('[WS] Server progress:', msg);
       } else if (msg === 'DONE') {
         ws.close();
         if (onComplete) onComplete();

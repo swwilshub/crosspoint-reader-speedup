@@ -84,9 +84,8 @@ void CrossPointWebServerActivity::onExit() {
     dnsServer = nullptr;
   }
 
-  // CRITICAL: Wait for LWIP stack to flush any pending packets
-  Serial.printf("[%lu] [WEBACT] Waiting 500ms for network stack to flush pending packets...\n", millis());
-  delay(500);
+  // Brief wait for LWIP stack to flush pending packets
+  delay(50);
 
   // Disconnect WiFi gracefully
   if (isApMode) {
@@ -96,11 +95,11 @@ void CrossPointWebServerActivity::onExit() {
     Serial.printf("[%lu] [WEBACT] Disconnecting WiFi (graceful)...\n", millis());
     WiFi.disconnect(false);  // false = don't erase credentials, send disconnect frame
   }
-  delay(100);  // Allow disconnect frame to be sent
+  delay(30);  // Allow disconnect frame to be sent
 
   Serial.printf("[%lu] [WEBACT] Setting WiFi mode OFF...\n", millis());
   WiFi.mode(WIFI_OFF);
-  delay(100);  // Allow WiFi hardware to fully power down
+  delay(30);  // Allow WiFi hardware to power down
 
   Serial.printf("[%lu] [WEBACT] [MEM] Free heap after WiFi disconnect: %d bytes\n", millis(), ESP.getFreeHeap());
 

@@ -145,16 +145,14 @@ void CrossPointWebServer::stop() {
     Serial.printf("[%lu] [WEB] WebSocket server stopped\n", millis());
   }
 
-  // Add delay to allow any in-flight handleClient() calls to complete
-  delay(100);
-  Serial.printf("[%lu] [WEB] Waited 100ms for handleClient to finish\n", millis());
+  // Brief delay to allow any in-flight handleClient() calls to complete
+  delay(20);
 
   server->stop();
   Serial.printf("[%lu] [WEB] [MEM] Free heap after server->stop(): %d bytes\n", millis(), ESP.getFreeHeap());
 
-  // Add another delay before deletion to ensure server->stop() completes
-  delay(50);
-  Serial.printf("[%lu] [WEB] Waited 50ms before deleting server\n", millis());
+  // Brief delay before deletion
+  delay(10);
 
   server.reset();
   Serial.printf("[%lu] [WEB] Web server stopped and deleted\n", millis());
