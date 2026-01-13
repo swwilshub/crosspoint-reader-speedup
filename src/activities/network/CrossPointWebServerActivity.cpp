@@ -322,19 +322,24 @@ void CrossPointWebServerActivity::loop() {
       constexpr int MAX_ITERATIONS = 500;
       for (int i = 0; i < MAX_ITERATIONS && webServer->isRunning(); i++) {
         webServer->handleClient();
-        // Reset watchdog every 32 iterations, yield every 64
-        // Tight loop with minimal yielding for maximum speed
+        // Reset watchdog every 32 iterations
         if ((i & 0x1F) == 0x1F) {
           esp_task_wdt_reset();
         }
+        // Yield and check for exit button every 64 iterations
         if ((i & 0x3F) == 0x3F) {
           yield();
+          // Check for exit button inside loop for responsiveness
+          if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+            onGoBack();
+            return;
+          }
         }
       }
       lastHandleClientTime = millis();
     }
 
-    // Handle exit on Back button
+    // Handle exit on Back button (also check outside loop)
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       onGoBack();
       return;
