@@ -97,8 +97,8 @@ class CalibreWirelessActivity final : public Activity {
 
   static void displayTaskTrampoline(void* param);
   static void networkTaskTrampoline(void* param);
-  [[noreturn]] void displayTaskLoop();
-  [[noreturn]] void networkTaskLoop();
+  void displayTaskLoop();
+  void networkTaskLoop();
   void render() const;
 
   // Network operations
