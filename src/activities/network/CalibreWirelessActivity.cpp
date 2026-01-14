@@ -670,8 +670,14 @@ void CalibreWirelessActivity::handleSendBook(const std::string& data) {
             numEnd++;
           }
           if (numEnd > numStart) {
-            length = std::stoul(data.substr(numStart, numEnd - numStart));
-            break;
+            // Use strtoul instead of std::stoul to avoid exceptions on ESP32
+            char* endPtr = nullptr;
+            const std::string numStr = data.substr(numStart, numEnd - numStart);
+            length = strtoul(numStr.c_str(), &endPtr, 10);
+            if (endPtr && *endPtr == '\0') {
+              break;
+            }
+            length = 0;  // Reset if parsing failed
           }
         }
       }
@@ -889,6 +895,8 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
     return 64ULL * 1024 * 1024 * 1024;  // Conservative fallback
   }
 
+  esp_task_wdt_reset();
+
   // Probe sizes from large to small (exponential decrease)
   // Start at 256GB (larger than any typical SD card) and work down
   constexpr uint64_t probeSizes[] = {
@@ -910,10 +918,12 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
   uint64_t availableSpace = 64ULL * 1024 * 1024;  // Minimum 64MB fallback
 
   for (const uint64_t size : probeSizes) {
+    esp_task_wdt_reset();
     // cppcheck-suppress useStlAlgorithm
     if (testFile.preAllocate(size)) {
       availableSpace = size;
       // Truncate back to 0 to release the allocation
+      esp_task_wdt_reset();
       testFile.truncate(0);
       Serial.printf("[%lu] [CAL] Free space probe: %llu bytes available\n", millis(),
                     static_cast<unsigned long long>(availableSpace));
@@ -921,6 +931,7 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
     }
   }
 
+  esp_task_wdt_reset();
   testFile.close();
   SdMan.remove(testPath);
 
