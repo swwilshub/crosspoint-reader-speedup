@@ -533,12 +533,16 @@ bool CalibreWirelessActivity::readJsonMessage(std::string& message) {
 
 void CalibreWirelessActivity::sendJsonResponse(const OpCode opcode, const std::string& data) {
   // Format: length + [opcode, {data}]
+  Serial.printf("[%lu] [CAL] sendJsonResponse: opcode=%d, data_len=%zu\n", millis(), opcode, data.length());
   std::string json = "[" + std::to_string(opcode) + "," + data + "]";
   const std::string lengthPrefix = std::to_string(json.length());
   json.insert(0, lengthPrefix);
 
+  Serial.printf("[%lu] [CAL] sendJsonResponse: writing %zu bytes\n", millis(), json.length());
   tcpClient.write(reinterpret_cast<const uint8_t*>(json.c_str()), json.length());
+  Serial.printf("[%lu] [CAL] sendJsonResponse: flushing\n", millis());
   tcpClient.flush();
+  Serial.printf("[%lu] [CAL] sendJsonResponse: done\n", millis());
 }
 
 void CalibreWirelessActivity::handleCommand(const OpCode opcode, const std::string& data) {
@@ -641,10 +645,14 @@ void CalibreWirelessActivity::handleGetDeviceInformation() {
 }
 
 void CalibreWirelessActivity::handleFreeSpace() {
+  Serial.printf("[%lu] [CAL] handleFreeSpace: getting free space...\n", millis());
   const uint64_t freeBytes = getSDCardFreeSpace();
+  Serial.printf("[%lu] [CAL] handleFreeSpace: got %llu bytes\n", millis(), static_cast<unsigned long long>(freeBytes));
   char response[64];
   snprintf(response, sizeof(response), "{\"free_space_on_device\":%llu}", static_cast<unsigned long long>(freeBytes));
+  Serial.printf("[%lu] [CAL] handleFreeSpace: sending response...\n", millis());
   sendJsonResponse(OpCode::OK, response);
+  Serial.printf("[%lu] [CAL] handleFreeSpace: done\n", millis());
 }
 
 void CalibreWirelessActivity::handleGetBookCount() {
@@ -960,8 +968,11 @@ uint64_t CalibreWirelessActivity::getSDCardFreeSpace() const {
   }
 
   esp_task_wdt_reset();
+  Serial.printf("[%lu] [CAL] Free space: closing test file...\n", millis());
   testFile.close();
+  Serial.printf("[%lu] [CAL] Free space: removing test file...\n", millis());
   SdMan.remove(testPath);
+  Serial.printf("[%lu] [CAL] Free space: done, returning %llu\n", millis(), static_cast<unsigned long long>(availableSpace));
 
   return availableSpace;
 }
