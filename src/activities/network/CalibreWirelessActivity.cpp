@@ -389,13 +389,13 @@ void CalibreWirelessActivity::handleTcpClient() {
     if (start != std::string::npos) {
       start++;
       size_t end = message.find(',', start);
-      if (end != std::string::npos) {
+      if (end != std::string::npos && end > start && start <= message.size()) {
         // Use strtol instead of std::stoi to avoid exceptions on ESP32
         const std::string opcodeStr = message.substr(start, end - start);
         char* endPtr = nullptr;
         const long opcodeInt = strtol(opcodeStr.c_str(), &endPtr, 10);
         if (endPtr == opcodeStr.c_str() || opcodeInt < 0 || opcodeInt >= OpCode::ERROR) {
-          Serial.printf("[%lu] [CAL] Invalid opcode: %d\n", millis(), opcodeInt);
+          Serial.printf("[%lu] [CAL] Invalid opcode: %ld\n", millis(), opcodeInt);
           sendJsonResponse(OpCode::OK, "{}");
           return;
         }
@@ -405,7 +405,7 @@ void CalibreWirelessActivity::handleTcpClient() {
         size_t dataStart = end + 1;
         size_t dataEnd = message.rfind(']');
         std::string data = "";
-        if (dataEnd != std::string::npos && dataEnd > dataStart) {
+        if (dataEnd != std::string::npos && dataEnd > dataStart && dataStart <= message.size()) {
           data = message.substr(dataStart, dataEnd - dataStart);
         }
 
@@ -493,22 +493,36 @@ bool CalibreWirelessActivity::readJsonMessage(std::string& message) {
 
   // Sanity check the message length
   if (msgLen > 1000000) {
-    recvBuffer = recvBuffer.substr(bracketPos + 1);  // Skip past this '[' and try again
+    // Bounds check before substr
+    if (bracketPos + 1 <= recvBuffer.size()) {
+      recvBuffer = recvBuffer.substr(bracketPos + 1);
+    } else {
+      recvBuffer.clear();
+    }
     return false;
   }
 
   // Check if we have the complete message
   size_t totalNeeded = bracketPos + msgLen;
+  // Guard against overflow
+  if (totalNeeded < bracketPos || totalNeeded < msgLen) {
+    recvBuffer.clear();
+    return false;
+  }
   if (recvBuffer.size() < totalNeeded) {
     // Not enough data yet - wait for more
     return false;
   }
 
-  // Extract the message
+  // Extract the message with bounds checking
+  if (bracketPos > recvBuffer.size()) {
+    recvBuffer.clear();
+    return false;
+  }
   message = recvBuffer.substr(bracketPos, msgLen);
 
   // Keep the rest in buffer (may contain binary data or next message)
-  if (recvBuffer.size() > totalNeeded) {
+  if (recvBuffer.size() > totalNeeded && totalNeeded <= recvBuffer.size()) {
     recvBuffer = recvBuffer.substr(totalNeeded);
   } else {
     recvBuffer.clear();
@@ -652,7 +666,7 @@ void CalibreWirelessActivity::handleSendBook(const std::string& data) {
       size_t quoteStart = data.find('"', colonPos + 1);
       if (quoteStart != std::string::npos) {
         size_t quoteEnd = data.find('"', quoteStart + 1);
-        if (quoteEnd != std::string::npos) {
+        if (quoteEnd != std::string::npos && quoteEnd > quoteStart && quoteStart + 1 <= data.size()) {
           lpath = data.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
         }
       }
