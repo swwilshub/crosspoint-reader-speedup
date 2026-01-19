@@ -296,7 +296,11 @@ void CalibreWirelessActivity::listenForDiscovery() {
             altEnd++;
           }
           if (altEnd > 0) {
-            calibreAltPort = static_cast<uint16_t>(std::stoi(altPortStr.substr(0, altEnd)));
+            // Use strtol instead of std::stoi to avoid exceptions on ESP32
+            const long altPortVal = strtol(altPortStr.c_str(), nullptr, 10);
+            if (altPortVal > 0 && altPortVal <= 65535) {
+              calibreAltPort = static_cast<uint16_t>(altPortVal);
+            }
           }
         } else {
           portStr = response.substr(semiPos + 1);
@@ -308,7 +312,11 @@ void CalibreWirelessActivity::listenForDiscovery() {
         }
 
         if (!portStr.empty()) {
-          calibrePort = static_cast<uint16_t>(std::stoi(portStr));
+          // Use strtol instead of std::stoi to avoid exceptions on ESP32
+          const long portVal = strtol(portStr.c_str(), nullptr, 10);
+          if (portVal > 0 && portVal <= 65535) {
+            calibrePort = static_cast<uint16_t>(portVal);
+          }
         }
 
         // Get hostname if present, otherwise use sender IP
@@ -382,8 +390,11 @@ void CalibreWirelessActivity::handleTcpClient() {
       start++;
       size_t end = message.find(',', start);
       if (end != std::string::npos) {
-        const int opcodeInt = std::stoi(message.substr(start, end - start));
-        if (opcodeInt < 0 || opcodeInt >= OpCode::ERROR) {
+        // Use strtol instead of std::stoi to avoid exceptions on ESP32
+        const std::string opcodeStr = message.substr(start, end - start);
+        char* endPtr = nullptr;
+        const long opcodeInt = strtol(opcodeStr.c_str(), &endPtr, 10);
+        if (endPtr == opcodeStr.c_str() || opcodeInt < 0 || opcodeInt >= OpCode::ERROR) {
           Serial.printf("[%lu] [CAL] Invalid opcode: %d\n", millis(), opcodeInt);
           sendJsonResponse(OpCode::OK, "{}");
           return;
@@ -462,8 +473,11 @@ bool CalibreWirelessActivity::readJsonMessage(std::string& message) {
       }
     }
     if (allDigits) {
-      msgLen = std::stoul(recvBuffer.substr(0, bracketPos));
-      validPrefix = true;
+      // Use strtoul instead of std::stoul to avoid exceptions on ESP32
+      const std::string lenStr = recvBuffer.substr(0, bracketPos);
+      char* endPtr = nullptr;
+      msgLen = strtoul(lenStr.c_str(), &endPtr, 10);
+      validPrefix = (endPtr != lenStr.c_str());
     }
   }
 
